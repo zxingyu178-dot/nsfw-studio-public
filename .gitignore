@@ -1,0 +1,15 @@
+# ---- 运行缓存与产物（本地生成，不入库） ----
+runtime/thumbs/
+runtime/logs/
+runtime/batch/
+runtime/prompt_cache.json
+runtime/id_pool.json
+temp/
+
+# ---- 日志与调试文件 ----
+*.log
+debug_out.txt
+
+# ---- Python ----
+__pycache__/
+*.pyc

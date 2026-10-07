@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NSFW Studio · 本地图像控制台</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231c191e'/%3E%3Ccircle cx='16' cy='16' r='8' fill='%23e58aa8'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">NSFW Studio <span class="sub">本地图像控制台</span></div>
+  <nav class="maintabs" id="mainTabs">
+    <button type="button" data-page="gencenter" class="active">生成中心</button>
+    <button type="button" data-page="console">控制台</button>
+    <button type="button" data-page="batch">批量生图</button>
+    <button type="button" data-page="gallery">图库</button>
+    <button type="button" data-page="faces">人脸库</button>
+    <button type="button" data-page="outfits">服饰库</button>
+    <button type="button" data-page="promptlib">提示词库</button>
+  </nav>
+  <button class="theme-toggle" id="themeToggle" title="切换深色/浅色模式">🌙 深色</button>
+  <div class="status" id="comfyStatus">
+    <span class="dot"></span><span id="statusText">正在检查 ComfyUI…</span>
+  </div>
+</header>
+
+<!-- ========== 页面0：生成中心（统一四种生成方式） ========== -->
+<main class="page" id="page-gencenter">
+  <div class="gc-layout">
+    <div class="gc-left">
+      <div class="gc-head">
+        <h3>统一生成</h3>
+        <div class="seg" id="gcSourceSeg">
+          <button type="button" data-src="manual" class="active">手写提示词</button>
+          <button type="button" data-src="keyword">关键词拼接</button>
+          <button type="button" data-src="library">用提示词库</button>
+          <button type="button" data-src="pack">AI 提示词包</button>
+        </div>
+      </div>
+
+      <div id="gcCompose">
+        <!-- 方式② 关键词拼接：编译面板（与控制台同一份实现，已移入本页） -->
+        <div id="gcKeywordBox" style="display:none">
+          <section class="panel gc-kwpanel" id="optionsPanel"></section>
+        </div>
+        <!-- 方式① 辅助：从已存模板载入 / 另存为模板 -->
+        <div class="gc-pick" id="gcTplPick" style="display:none">
+          <label>从模板载入</label>
+          <select id="gcTplSelect"><option value="">选择模板…</option></select>
+          <button id="gcSaveTplBtn" class="ghost small">另存为模板</button>
+        </div>
+        <div class="gc-pick" id="gcLibPick" style="display:none">
+          <label>选择提示词库条目</label>
+          <select id="gcLibSelect"><option value="">选择条目…</option></select>
+          <span class="hint">填入后可临时修改；已生成的图会显示在右侧</span>
+        </div>
+
+        <div class="pblock">
+          <div class="phead">正面提示词</div>
+          <textarea id="gcPositive" spellcheck="false" rows="7"></textarea>
+        </div>
+        <div class="pblock">
+          <div class="phead">负面提示词（可选，留空则用默认负面）</div>
+          <textarea id="gcNegative" spellcheck="false" rows="3"></textarea>
+        </div>
+
+        <div class="gc-params">
+          <div class="param-row"><label>尺寸</label>
+            <select id="gcSize">
+              <option value="832x1216">竖幅 832×1216</option>
+              <option value="1216x832">横幅 1216×832</option>
+              <option value="1024x1024">方形 1024×1024</option>
+            </select>
+          </div>
+          <div class="param-row"><label>张数</label><input type="number" id="gcCount" value="4" min="1" max="200"></div>
+          <div class="param-row"><label>步数</label><input type="number" id="gcSteps" value="25" min="1" max="100"></div>
+          <div class="param-row"><label>CFG</label><input type="number" id="gcCfg" value="1.0" step="0.1" min="0.1" max="10"></div>
+          <div class="param-row"><label>条目名称</label><input type="text" id="gcName" placeholder="可选；默认按时间自动命名"></div>
+          <div class="param-row"><label>分类</label><input type="text" id="gcCategory" placeholder="可选；默认按来源（手动/拼接/库）"></div>
+        </div>
+        <div class="gc-submit">
+          <button id="gcSubmitBtn" class="primary">开始生成</button>
+        </div>
+        <div class="hint" id="gcSubmitHint"></div>
+      </div>
+
+      <div id="gcPack" style="display:none">
+        <div class="gc-pack-bar">
+          <input type="text" id="gcPackDir" placeholder="提示词包目录（含 manifest.json）" title="默认：comfyui\temp\prompts20">
+          <button class="ghost small" id="gcPackReload">刷新清单</button>
+        </div>
+        <div class="hint" id="gcPackHint">加载中…</div>
+        <div class="gc-pack-list" id="gcPackList"></div>
+        <div class="gc-pack-params">
+          <div class="param-row"><label>每段张数</label><input type="number" id="gcPackCount" value="16" min="1" max="200"></div>
+          <button id="gcPackSubmitBtn" class="primary">提交所选（内部批量）</button>
+          <button id="gcPackAllBtn" class="ghost small">全选未完成</button>
+        </div>
+        <div class="hint">与外部脚本同一套编号命名（ID_第N张_s种子），内部/外部可互相断点续跑</div>
+      </div>
+    </div>
+
+    <div class="gc-right">
+      <div class="section-label">当前任务</div>
+      <div class="batch-status" id="gcStatus"><div class="empty-hint">尚未提交任务</div></div>
+      <div class="section-label">生成预览</div>
+      <div class="gc-grid" id="gcGallery"><div class="empty-hint">任务运行时图片会显示在这里</div></div>
+      <div class="section-label gc-existing-label" id="gcExistingLabel" style="display:none">该提示词已生成的图片</div>
+      <div class="gc-grid gc-existing" id="gcExisting" style="display:none"></div>
+      <div class="gc-ext" id="gcExtLine"></div>
+      <div class="section-label">历史任务（点任意任务可接管查看）</div>
+      <div id="gcHistory"><div class="empty-hint">暂无历史任务</div></div>
+    </div>
+  </div>
+</main>
+
+<!-- ========== 页面1：控制台（原有功能） ========== -->
+<main class="layout page" id="page-console" style="display:none">
+  <section class="panel moved-note">
+    <h3>关键词拼接已移至「生成中心」</h3>
+    <p>统一入口：<b>生成中心 → 方式②「关键词拼接」</b>。选择关键词后，拼好的提示词会直接进入生成中心的提示词框，可继续修改与生成。</p>
+    <p class="muted">本页保留：锁脸 / 图生图、手填提示词生成、放大选中（4x）、生成历史。</p>
+    <button type="button" class="primary" onclick="window.showPage('gencenter')">去生成中心 →</button>
+  </section>
+
+  <section class="workspace">
+    <div class="modebar">
+      <div class="seg" id="modeSeg">
+        <button type="button" data-mode="random">随机新人物</button>
+        <button type="button" data-mode="lock">锁定参考人物（同脸同身材写真集）</button>
+      </div>
+      <div class="lockbox" id="lockBox" style="display:none">
+        <div class="lock-refs">
+          <div class="lock-ref-item">
+            <span class="lock-ref-label">人脸</span>
+            <input type="file" id="refFile" accept="image/*">
+            <img id="refPreview" class="refprev" alt="参考图">
+          </div>
+          <div class="lock-ref-item">
+            <span class="lock-ref-label">服饰</span>
+            <img id="outfitPreview" class="refprev" alt="服饰参考" style="display:none">
+            <span class="hint" id="outfitHint" style="font-size:11px">从服饰库选用</span>
+          </div>
+        </div>
+        <span class="hint">上传 1 张清晰、正面、光线好的图；要锁身材请用全身或半身图</span>
+        <button type="button" id="clearRef" class="ghost small">清除参考图</button>
+      </div>
+    </div>
+
+    <div class="img2img-box" id="img2imgBox">
+      <div class="img2img-head">
+        <label class="img2img-toggle"><input type="checkbox" id="img2imgEnable"> 图生图（基于参考图重绘）</label>
+        <span class="hint" id="img2imgHint" style="display:none">去噪越低越接近原图，越高越自由发挥</span>
+      </div>
+      <div class="img2img-body" id="img2imgBody" style="display:none">
+        <div class="img2img-upload">
+          <input type="file" id="img2imgFile" accept="image/*">
+          <img id="img2imgPreview" class="refprev" alt="参考图" style="display:none">
+          <span class="hint" id="img2imgFileHint">点击上传参考图</span>
+        </div>
+        <div class="img2img-denoise">
+          <label>重绘幅度 <span id="denoiseVal">0.65</span></label>
+          <input type="range" id="denoiseSlider" min="0.1" max="1.0" step="0.05" value="0.65">
+          <div class="denoise-labels"><span>接近原图</span><span>自由发挥</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="controls">
+      <button id="generateBtn" class="primary">生成</button>
+      <button id="stopBtn" class="ghost" disabled>中断</button>
+      <button id="upscaleBtn" class="accent" disabled>放大选中（4x）</button>
+      <button id="selectAllBtn" class="ghost small">全选</button>
+      <div class="progress-wrap">
+        <div class="gen-progress" id="genProgress"><div class="gen-progress-bar" id="genProgressBar"></div></div>
+        <div class="progress" id="progress">就绪</div>
+      </div>
+    </div>
+
+    <div class="section-label">原始图（点击图片勾选要高清放大的，再点「放大选中」）</div>
+    <div class="gallery" id="gallery">
+      <div class="empty-hint">设置好左侧选项后，点击「生成」，图片会显示在这里</div>
+    </div>
+
+    <div class="section-label">高清成品（4x，自动保存，可单张下载）</div>
+    <div class="gallery hd" id="hdGallery">
+      <div class="empty-hint">选中原始图并点「放大选中」后，高清成品会显示在这里</div>
+    </div>
+
+    <details class="gen-history" id="genHistoryPanel">
+      <summary>生成历史 <span class="muted" id="genHistoryCount"></span>
+        <button class="ghost tiny" id="genHistoryClear" style="float:right">清空</button>
+      </summary>
+      <div class="gen-history-list" id="genHistoryList">
+        <div class="empty-hint">暂无历史记录</div>
+      </div>
+    </details>
+
+    <details class="prompts" id="promptDetails">
+      <summary>查看 / 编辑编译提示词</summary>
+      <div class="template-bar">
+        <select id="templateSelect" class="template-select">
+          <option value="">选择模板…</option>
+        </select>
+        <button id="templateApply" class="ghost small" disabled>应用</button>
+        <button id="templateSave" class="ghost small">保存当前为模板</button>
+        <button id="templateDelete" class="danger small" disabled>删除模板</button>
+      </div>
+      <div class="pblock">
+        <div class="phead">正面提示词（实时编译，也可手动修改）</div>
+        <textarea id="positive" spellcheck="false"></textarea>
+      </div>
+      <div class="pblock">
+        <div class="phead">负面提示词</div>
+        <textarea id="negative" spellcheck="false"></textarea>
+      </div>
+    </details>
+  </section>
+</main>
+
+<!-- ========== 页面2：批量生图 ========== -->
+<main class="page" id="page-batch" style="display:none">
+  <div class="batch-layout">
+    <div class="batch-left">
+      <div class="batch-toolbar">
+        <h3>提示词列表</h3>
+        <div>
+          <button id="batchAddBtn" class="ghost small">+ 添加</button>
+          <button id="batchImportBtn" class="ghost small">从提示词库导入</button>
+          <button id="batchClearBtn" class="ghost small">清空</button>
+        </div>
+      </div>
+      <div class="batch-list" id="batchList">
+        <div class="empty-hint">点击「添加」或「从提示词库导入」开始</div>
+      </div>
+      <div class="batch-params">
+        <h4>全局参数</h4>
+        <div class="param-row"><label>尺寸</label>
+          <select id="batchSize"><option value="832x1216">竖幅 832×1216</option><option value="1216x832">横幅 1216×832</option><option value="1024x1024">方形 1024×1024</option></select>
+        </div>
+        <div class="param-row"><label>每段张数</label><input type="number" id="batchCount" value="16" min="1" max="100"></div>
+        <div class="param-row"><label>步数</label><input type="number" id="batchSteps" value="25" min="15" max="50"></div>
+        <div class="param-row"><label>CFG</label><input type="number" id="batchCfg" value="1.0" step="0.5" min="1" max="10"></div>
+        <div class="param-row"><label>输出前缀</label><input type="text" id="batchPrefix" value="nsfw-studio/batch/图" title="目录部分作为输出子目录；文件名会自动追加 _s种子（断点续跑识别用）"></div>
+        <div class="param-row"><label>任务名称</label><input type="text" id="batchName" placeholder="可选，便于识别"></div>
+      </div>
+      <div class="batch-submit">
+        <button id="batchSubmitBtn" class="primary">提交批量任务</button>
+        <button id="batchCancelBtn" class="ghost" disabled>停止当前任务</button>
+      </div>
+    </div>
+    <div class="batch-right">
+      <div class="ext-batch" id="extBatchStatus">
+        <div class="ext-batch-head"><span class="ext-batch-title">外部批量脚本（千问 50段×16张）</span><span class="ext-batch-dot" id="extBatchDot"></span></div>
+        <div class="ext-batch-body" id="extBatchBody"><div class="empty-hint">检查中…</div></div>
+        <div class="ext-batch-ctl">
+          <label class="ext-ctl-item">每段张数 <input type="number" id="extCount" min="1" max="64" value="16" title="每段生成张数（1-64）"></label>
+          <label class="ext-ctl-item">起始段 <input type="number" id="extStart" min="1" value="1" title="从第几段开始；已生成的图会自动跳过（断点续跑）"></label>
+          <button class="primary tiny" id="extStartBtn">启动</button>
+          <button class="danger tiny" id="extStopBtn" style="display:none">停止</button>
+        </div>
+      </div>
+      <div class="batch-status" id="batchStatus">
+        <div class="empty-hint">尚未提交批量任务</div>
+      </div>
+      <div class="batch-preview" id="batchPreview">
+        <div class="section-label">当前生成预览</div>
+        <div class="gallery" id="batchGallery"><div class="empty-hint">任务运行后图片会显示在这里</div></div>
+      </div>
+      <div class="batch-history">
+        <div class="section-label">历史任务</div>
+        <div id="batchHistoryList"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 提示词条目编辑弹窗 -->
+  <div class="modal" id="bModal" style="display:none">
+    <div class="modal-bg" id="bModalBg"></div>
+    <div class="modal-content">
+      <h3 id="bModalTitle">添加提示词</h3>
+      <div class="modal-field"><label>名称</label><input type="text" id="bName" placeholder="如：L3_01_夜庭园"></div>
+      <div class="modal-field"><label>正面提示词</label><textarea id="bPositive" rows="7" spellcheck="false"></textarea></div>
+      <div class="modal-field"><label>负面提示词（可选）</label><textarea id="bNegative" rows="3" spellcheck="false"></textarea></div>
+      <div class="modal-field"><label>该段张数</label><input type="number" id="bCount" min="1" max="200" value="16"></div>
+      <div class="modal-actions">
+        <button id="bSaveBtn" class="primary">保存</button>
+        <button id="bCancelBtn" class="ghost">取消</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 从提示词库导入弹窗 -->
+  <div class="modal" id="biModal" style="display:none">
+    <div class="modal-bg" id="biModalBg"></div>
+    <div class="modal-content">
+      <h3>从提示词库导入</h3>
+      <div class="bim-toolbar">
+        <input type="text" id="biSearch" placeholder="搜索名称 / 内容…">
+        <button id="biSelectAll" class="ghost small">全选</button>
+        <span class="muted" id="biCount"></span>
+      </div>
+      <div class="bim-list" id="biList"></div>
+      <div class="modal-actions">
+        <button id="biImportBtn" class="primary">导入所选</button>
+        <button id="biCancelBtn" class="ghost">取消</button>
+      </div>
+    </div>
+  </div>
+</main>
+
+<!-- ========== 页面3：图库 ========== -->
+<main class="page" id="page-gallery" style="display:none">
+  <div class="gallery-page">
+    <div class="gallery-sidebar">
+      <h3>目录</h3>
+      <div id="galleryDirs" class="gallery-dirs"></div>
+    </div>
+    <div class="gallery-main">
+      <div class="gallery-toolbar">
+        <div class="gallery-path" id="galleryPath">全部</div>
+        <div class="gallery-search-wrap">
+          <input type="text" id="gallerySearch" class="gallery-search" placeholder="搜索提示词/文件名/目录…">
+          <button id="galleryFavFilter" class="ghost small">☆ 只看收藏</button>
+        </div>
+        <div class="gallery-actions">
+          <span id="galleryCount" class="muted"></span>
+          <button id="gallerySelectAll" class="ghost small">全选</button>
+          <button id="galleryCompare" class="ghost small" disabled>对比（需选2张）</button>
+          <button id="galleryUpscale" class="accent" disabled>放大选中（4x）</button>
+          <button id="galleryDelete" class="danger" disabled>删除选中</button>
+          <button id="galleryRefresh" class="ghost small">刷新</button>
+        </div>
+      </div>
+      <div class="gallery-grid" id="galleryGrid"></div>
+      <div class="gallery-sentinel" id="gallerySentinel"><div class="spinner"></div><span class="muted">加载更多…</span></div>
+    </div>
+  </div>
+  <!-- 大图预览弹窗 -->
+  <div class="lightbox" id="lightbox" style="display:none">
+    <div class="lightbox-bg" id="lightboxBg"></div>
+    <div class="lightbox-content">
+      <div class="lightbox-stage">
+        <img id="lightboxImg" alt="preview">
+        <div class="lightbox-loader" id="lightboxLoader"><div class="spinner"></div></div>
+      </div>
+      <div class="lightbox-info" id="lightboxInfo"></div>
+      <button class="lightbox-close" id="lightboxClose">&times;</button>
+    </div>
+  </div>
+
+  <!-- 对比视图弹窗 -->
+  <div class="compare-view" id="compareView" style="display:none">
+    <div class="compare-bg" id="compareBg"></div>
+    <div class="compare-content">
+      <div class="compare-header">
+        <span id="compareTitle">图片对比</span>
+        <div class="compare-labels">
+          <span class="compare-label-left" id="compareLabelLeft">图A</span>
+          <span class="compare-label-right" id="compareLabelRight">图B</span>
+        </div>
+        <button class="lightbox-close" id="compareClose">&times;</button>
+      </div>
+      <div class="compare-container" id="compareContainer">
+        <div class="compare-side compare-left">
+          <img id="compareImgLeft" alt="left">
+        </div>
+        <div class="compare-side compare-right" id="compareRightWrap">
+          <img id="compareImgRight" alt="right">
+        </div>
+        <div class="compare-slider" id="compareSlider">
+          <div class="compare-handle">⇔</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<!-- ========== 页面5：人脸库 ========== -->
+<main class="page" id="page-faces" style="display:none">
+  <div class="faces-page">
+    <div class="faces-toolbar">
+      <h3>人脸库</h3>
+      <div>
+        <button id="facesUploadBtn" class="ghost small">+ 上传人脸</button>
+        <input type="file" id="facesUploadFile" accept="image/*" style="display:none">
+        <button id="facesRefreshBtn" class="ghost small">刷新</button>
+      </div>
+    </div>
+    <div class="faces-hint muted">点击一张人脸「选用」，自动切到控制台并设为锁脸参考图</div>
+    <div class="faces-grid" id="facesGrid">
+      <div class="empty-hint">还没有人脸。从图库收藏或上传一张清晰正面照</div>
+    </div>
+  </div>
+</main>
+
+<!-- ========== 页面6：服饰库 ========== -->
+<main class="page" id="page-outfits" style="display:none">
+  <div class="faces-page">
+    <div class="faces-toolbar">
+      <h3>服饰库</h3>
+      <div>
+        <button id="outfitsUploadBtn" class="ghost small">+ 上传服饰</button>
+        <input type="file" id="outfitsUploadFile" accept="image/*" style="display:none">
+        <button id="outfitsRefreshBtn" class="ghost small">刷新</button>
+      </div>
+    </div>
+    <div class="faces-hint muted">上传穿着目标服饰的清晰图，选用后生成时会参考服饰细节</div>
+    <div class="faces-grid" id="outfitsGrid">
+      <div class="empty-hint">还没有服饰参考图。上传一张穿着目标服饰的图</div>
+    </div>
+  </div>
+</main>
+
+<!-- ========== 页面4：提示词库 ========== -->
+<main class="page" id="page-promptlib" style="display:none">
+  <div class="promptlib-page">
+    <div class="promptlib-toolbar">
+      <h3>提示词库</h3>
+      <div>
+        <button id="plAddBtn" class="ghost small">+ 新建</button>
+        <button id="plImportBtn" class="ghost small">从目录批量导入</button>
+        <button id="plExportBtn" class="ghost small">导出 JSON</button>
+      </div>
+    </div>
+    <div class="promptlib-list" id="promptlibList"></div>
+  </div>
+  <!-- 编辑弹窗 -->
+  <div class="modal" id="plModal" style="display:none">
+    <div class="modal-bg" id="plModalBg"></div>
+    <div class="modal-content">
+      <h3 id="plModalTitle">编辑提示词</h3>
+      <div class="modal-field"><label>名称</label><input type="text" id="plName"></div>
+      <div class="modal-field"><label>分类</label><input type="text" id="plCategory" placeholder="可选"></div>
+      <div class="modal-field"><label>正面提示词</label><textarea id="plPositive" rows="8" spellcheck="false"></textarea></div>
+      <div class="modal-field"><label>负面提示词</label><textarea id="plNegative" rows="3" spellcheck="false"></textarea></div>
+      <div class="modal-actions">
+        <button id="plSaveBtn" class="primary">保存</button>
+        <button id="plCancelBtn" class="ghost">取消</button>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script src="data.js"></script>
+<script src="data_wardrobe.js"></script>
+<script src="data_body.js"></script>
+<script src="data_face.js"></script>
+<script src="data_world.js"></script>
+<script src="app.js"></script>
+<script src="gallery.js"></script>
+<script src="faces.js"></script>
+<script src="outfits.js"></script>
+<script src="batch.js"></script>
+<script src="promptlib.js"></script>
+<script src="gencenter.js"></script>
+<script src="nav.js"></script>
+</body>
+</html>
