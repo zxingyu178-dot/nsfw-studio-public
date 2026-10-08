@@ -36,7 +36,7 @@ start.bat            双击启动（自动开浏览器）
 
 static/index.html    页面骨架：6 个 <main class="page" id="page-xxx">（gencenter/console/batch/gallery/faces/outfits/promptlib）
 static/nav.js        主标签切换 showPage(id) + 各页刷新钩子（默认页 = 生成中心）
-static/gencenter.js  生成中心：四来源（手写/关键词拼接/库/AI包）+ 参数 + 任务中心（轮询渲染进度/缩略图/停止/继续）+ 库条目查重
+static/gencenter.js  生成中心：四来源（手写/关键词拼接/库/AI包）+ 参数 + 参考图（锁脸：人脸库/上传）+ 任务中心（轮询渲染进度/缩略图/停止/继续）+ 库条目查重
 static/app.js        控制台：关键词芯片引擎（state / renderOptions / compile）+ 锁脸/图生图/放大 + 生成历史 + 图库（高清）
 static/batch.js      批量生图页：草稿列表（localStorage 持久化）/ 弹窗编辑 / 提示词库导入 / 任务进度控制 / 外部脚本启停面板
 static/gallery.js    图库页：瀑布流 + 全量搜索（缓存/防抖）+ 收藏筛选 + 看图器（滚轮围绕光标缩放/拖动/双击/双指）+ 对比视图
@@ -128,7 +128,7 @@ runtime/*.json       运行数据随仓库携带：promptlib / favorites / faces
 ## 7. 已知问题与过渡态（审阅时请知悉，勿误报为缺陷）
 
 1. **控制台生成按钮仍用旧命名**（日期目录 + 时间种子）——新规范只在生成中心/包任务生效（渐进迁移中）；
-2. **`build_prompt` 存在两份**（`server.py` 控制台链路 / `batch_worker.py` 批量链路）——有意分开，前者支持锁脸/图生图，后者暂无；
+2. **`build_prompt` 存在两份**（`server.py` 控制台链路 / `batch_worker.py` 批量链路）——有意分开：两者现已都支持锁脸 / 服饰参考（工作流逐字节等价，有等价性测试脚本）；图生图仍仅控制台支持；
 3. **查重为精确文本匹配**（归一化空白），生成前临时改词会查不到旧图（显示"暂无生成记录"）；
 4. **`.gallery` 瀑布流容器需要 JS 计算行跨行**（`grid-auto-rows:6px`），生成中心因此使用独立 `.gc-grid`；
 5. PowerShell 5.1 `Invoke-RestMethod -Body <字符串>` 发送中文会变 `?`——测试脚本须用 UTF-8 字节（本项目测试脚本在 `temp/`，不入库）；

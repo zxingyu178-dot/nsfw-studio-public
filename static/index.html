@@ -65,6 +65,17 @@
           <textarea id="gcNegative" spellcheck="false" rows="3"></textarea>
         </div>
 
+        <div class="gc-ref">
+          <span class="gc-ref-label">参考图（锁脸）</span>
+          <select id="gcFaceSelect"><option value="">不使用人脸（纯文生图）</option></select>
+          <button type="button" class="ghost small" id="gcRefUploadBtn">上传参考图</button>
+          <button type="button" class="ghost small" id="gcRefClearBtn">清除</button>
+          <input type="file" id="gcRefFile" accept="image/*" style="display:none">
+          <span class="gc-ref-preview" id="gcRefPreviewWrap" style="display:none">
+            <img id="gcRefImg" alt=""><span id="gcRefName"></span>
+          </span>
+        </div>
+
         <div class="gc-params">
           <div class="param-row"><label>尺寸</label>
             <select id="gcSize">

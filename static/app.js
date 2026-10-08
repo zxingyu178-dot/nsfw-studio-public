@@ -937,6 +937,18 @@ function bindModeAndRef() {
     compile("console");
   };
 
+  // 生成中心用：清除锁脸/服饰参考，恢复随机模式（只重置状态与模式，不写提示词框）
+  window.gcClearFace = function() {
+    state.mode = "random";
+    state.lockImage = null;
+    state.outfitImage = null;
+    const lb = document.getElementById("lockBox");
+    if (lb) lb.style.display = "none";
+    const ms = document.getElementById("modeSeg");
+    if (ms) ms.querySelectorAll("button").forEach((x) =>
+      x.classList.toggle("active", x.dataset.mode === "random"));
+  };
+
   // 从图库"生成变体"：带入该图的提示词和种子，切到控制台
   window.useImageVariant = function(prompt, seed, filename) {
     if (prompt) $("#positive").value = prompt;

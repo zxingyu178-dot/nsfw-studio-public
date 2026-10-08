@@ -37,6 +37,8 @@ _stop = threading.Event()
 def build_prompt(p):
     w = int(p["width"])
     h = int(p["height"])
+    lock = p.get("lock_image")
+    outfit = p.get("outfit_image")
     enc_inputs = {
         "clip": ["11", 0],
         "prompt": p["positive"],
@@ -58,6 +60,16 @@ def build_prompt(p):
                # 与外部千问批量脚本的命名约定一致
                "filename_prefix": "%s_s%d" % (p.get("prefix", "nsfw-studio/batch"), int(p["seed"]))}},
     }
+    # 锁脸 / 服饰参考图：LoadImage 接入 TextEncodeQwenImage21 的 autogrow 组。
+    # API 键名必须是 "images.image_N"（与 server.py 控制台链路一致，勿改成嵌套结构）。
+    if lock:
+        prompt["30"] = {"class_type": "LoadImage", "inputs": {"image": lock}}
+        enc_inputs["images.image_1"] = ["30", 0]
+        enc_inputs["vae"] = ["12", 0]
+    if outfit:
+        prompt["31"] = {"class_type": "LoadImage", "inputs": {"image": outfit}}
+        enc_inputs["images.image_2"] = ["31", 0]
+        enc_inputs["vae"] = ["12", 0]
     prompt["13"] = {"class_type": "TextEncodeQwenImage21", "inputs": enc_inputs}
     return prompt
 
@@ -121,7 +133,7 @@ def _item_prefix(task, item, j):
 
 
 # ---------- 任务创建 ----------
-def create_task(items, width, height, steps, cfg, prefix, name="", lock_image=None):
+def create_task(items, width, height, steps, cfg, prefix, name="", lock_image=None, outfit_image=None):
     tid = uuid.uuid4().hex[:12]
     seed_base = int(time.time()) % 900000 + 100000
     task_items = []
@@ -151,6 +163,7 @@ def create_task(items, width, height, steps, cfg, prefix, name="", lock_image=No
         "width": width, "height": height, "steps": steps, "cfg": cfg,
         "prefix": prefix,
         "lock_image": lock_image,
+        "outfit_image": outfit_image,
         "total": total,
         "done": 0, "failed": 0, "skipped": 0,
         "current_item": -1, "current_image": 0,
@@ -227,6 +240,7 @@ def _run(task):
                         "seed": seed, "steps": task["steps"], "cfg": task["cfg"],
                         "prefix": item_prefix,
                         "lock_image": task.get("lock_image"),
+                        "outfit_image": task.get("outfit_image"),
                     })
                     r = requests.post(COMFY + "/prompt",
                                       json={"prompt": prompt, "client_id": CLIENT_ID},

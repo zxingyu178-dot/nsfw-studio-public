@@ -11,6 +11,8 @@
   let taskList = [];
   let pollTimer = null;
   let queueInfo = { running: 0, pending: 0 };
+  let faces = [];              // 人脸库缓存（锁脸参考）
+  let refPath = null;          // 当前锁脸参考路径（相对 ComfyUI input，如 characters/face_002.png）
 
   function viewUrl(im) {
     return `/api/view?filename=${enc(im.filename)}&subfolder=${enc(im.subfolder || "")}&type=${enc(im.type || "output")}`;
@@ -123,6 +125,46 @@
     lookupExisting(t.positive || "");   // 查该提示词已生成的图片 → 右侧展示
   }
 
+  // ---------- 参考图（锁脸） ----------
+  async function loadFaces() {
+    try {
+      const d = await (await fetch("/api/faces/list")).json();
+      faces = d.faces || d.items || [];
+      const sel = $("#gcFaceSelect");
+      sel.innerHTML = '<option value="">不使用人脸（纯文生图）</option>' + faces.map((f, i) =>
+        `<option value="${i}">${f.name || f.id || "人脸" + (i + 1)}</option>`).join("");
+    } catch (e) { /* ignore */ }
+  }
+  function setRef(path, name, previewUrl) {
+    refPath = path || null;
+    const box = $("#gcRefPreviewWrap"), img = $("#gcRefImg"), nm = $("#gcRefName");
+    if (refPath) {
+      box.style.display = "";
+      if (previewUrl) img.src = previewUrl;
+      nm.textContent = name || "";
+      // 复用控制台的锁脸状态钩子：锁脸模式 + 锁脸措辞（compileLockedZh）
+      if (window.setLockFace) window.setLockFace(refPath, name || "");
+    } else {
+      box.style.display = "none"; img.removeAttribute("src"); nm.textContent = "";
+      if (window.gcClearFace) window.gcClearFace();
+      $("#gcFaceSelect").value = "";
+    }
+    // 锁脸措辞 / 恢复普通措辞 → 刷新本页提示词框
+    if (window.gcCompile) window.gcCompile();
+  }
+  function applyFace() {
+    const idx = parseInt($("#gcFaceSelect").value, 10);
+    const f = faces[idx];
+    if (!f) { setRef(null); return; }
+    const path = f.filename || f.image || "";
+    if (!path) return;
+    const parts = path.split("/");
+    const fn = parts[parts.length - 1];
+    const sub = parts.slice(0, -1).join("/");
+    const url = `/api/view?filename=${enc(fn)}&subfolder=${enc(sub)}&type=input`;
+    setRef(path, f.name || f.id || "", url);
+  }
+
   // ---------- 提交（手写 / 模板 / 库） ----------
   async function submitCompose() {
     const pos = $("#gcPositive").value.trim();
@@ -140,6 +182,7 @@
       width: parseInt(size[0], 10), height: parseInt(size[1], 10),
       steps: parseInt($("#gcSteps").value, 10) || 25,
       cfg: parseFloat($("#gcCfg").value) || 1.0,
+      lock_image: refPath || undefined,   // 锁脸参考（选了人脸或上传了参考图时）
     };
     const btn = $("#gcSubmitBtn");
     btn.disabled = true;
@@ -441,6 +484,28 @@
   });
   $("#gcTplSelect").addEventListener("change", applyTemplate);
   $("#gcLibSelect").addEventListener("change", applyLib);
+  $("#gcFaceSelect").addEventListener("change", applyFace);
+  $("#gcRefClearBtn").addEventListener("click", () => setRef(null));
+  $("#gcRefUploadBtn").addEventListener("click", () => $("#gcRefFile").click());
+  $("#gcRefFile").addEventListener("change", (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const dataUrl = reader.result;
+      try {
+        const r = await fetch("/api/upload", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ image: dataUrl }),
+        });
+        const d = await r.json();
+        if (d.error) { alert("上传失败：" + d.error); return; }
+        setRef(d.image, f.name, dataUrl);
+        $("#gcSubmitHint").textContent = "参考图已就绪（锁脸生成）";
+      } catch (err) { alert("上传失败：" + err.message); }
+    };
+    reader.readAsDataURL(f);
+  });
   $("#gcSubmitBtn").addEventListener("click", submitCompose);
   $("#gcSaveTplBtn").addEventListener("click", saveAsTemplate);
   $("#gcPackReload").addEventListener("click", loadPack);
@@ -464,6 +529,7 @@
   setSource("manual");
   loadTemplates();
   loadLib();
+  loadFaces();
   refreshTasks();
   refreshExtLine();
   setInterval(() => { if (!pollTimer) refreshExtLine(); }, 15000);   // 外部脚本状态轻量轮询

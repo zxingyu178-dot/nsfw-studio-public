@@ -1495,10 +1495,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 })
             # 单条任务直接以条目名命名（历史列表一眼可认）；多条任务用来源命名
             single = task_items[0]["label"] if len(task_items) == 1 else None
+            # 参考图（锁脸 / 服饰）：相对 ComfyUI input 的路径（如 characters/face_002.png）
+            lock_image = (data.get("lock_image") or "").strip() or None
+            outfit_image = (data.get("outfit_image") or "").strip() or None
             task = batch_worker.create_task(
                 items=task_items, width=width, height=height,
                 steps=steps, cfg=cfg, prefix="nsfw-studio/batch",
-                name=data.get("task_name") or single or ("生成中心 · %s" % source))
+                name=data.get("task_name") or single or ("生成中心 · %s" % source),
+                lock_image=lock_image, outfit_image=outfit_image)
             self._json(200, {
                 "ok": True, "id": task["id"], "total": task["total"],
                 "entries": [{"id": t["entry_id"], "dir": t["out_dir"]} for t in task_items],
@@ -1687,6 +1691,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
 class ThreadingServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
     daemon_threads = True
     allow_reuse_address = True
+    # 默认积压队列仅 5：页面一次并发加载十几个静态文件时会被拒（ERR_CONNECTION_REFUSED）
+    request_queue_size = 128
 
 
 def create_stop_event():
