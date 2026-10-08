@@ -30,6 +30,17 @@ CLIENT_ID = "nsfw-batch"  # 提交给 ComfyUI 的 client_id，用于区分本引
 _tasks = {}
 _lock = threading.Lock()
 _worker = None
+def _errlog(msg):
+    """worker 异常落盘（runtime/logs/batch_worker_error.log），供排查"队列卡死"类问题。"""
+    try:
+        d = os.path.join(os.path.dirname(os.path.abspath(__file__)), "runtime", "logs")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "batch_worker_error.log"), "a", encoding="utf-8") as f:
+            f.write("[%s] %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), msg))
+    except Exception:
+        pass
+
+
 _stop = threading.Event()
 
 
@@ -129,7 +140,9 @@ def _item_prefix(task, item, j):
     od = item.get("out_dir")
     if eid and od:
         return "%s/%02d_第%02d张" % (od, int(eid), j + 1)
-    return task["prefix"]
+    # 旧任务回退任务级 prefix；prefix 为空/异常时用安全默认值（防命名环节抛错卡死）
+    p = task.get("prefix")
+    return p if isinstance(p, str) and p.strip() else "nsfw-studio/batch"
 
 
 # ---------- 任务创建 ----------
@@ -198,7 +211,20 @@ def _loop():
         if not task:
             time.sleep(2)
             continue
-        _run(task)
+        try:
+            _run(task)
+        except Exception:
+            # 兜底：单任务异常绝不能杀死 worker 循环（否则整个队列永久卡死）
+            import traceback
+            tb = traceback.format_exc()
+            _errlog("任务 %s 崩溃：\n%s" % (task.get("id"), tb))
+            task["status"] = "failed"
+            task["error"] = ("worker 异常: " + tb.strip().splitlines()[-1])[:500]
+            task["finished_at"] = time.time()
+            task["current_item"] = -1
+            task["current_image"] = 0
+            _save(task)
+            time.sleep(1)
 
 
 def _run(task):
@@ -214,55 +240,66 @@ def _run(task):
         for j in range(item["count"]):
             if task["status"] == "cancelled":
                 break
-            task["current_image"] = j + 1
-            seed = item["seed_base"] + j
-            item_prefix = _item_prefix(task, item, j)
+            try:
+                task["current_image"] = j + 1
+                seed = item["seed_base"] + j
+                item_prefix = _item_prefix(task, item, j)
 
-            # 断点续跑：已落盘则跳过
-            existing = _image_exists(item_prefix, seed)
-            if existing:
-                item["images"].append(existing)
-                item["skipped"] += 1
-                task["skipped"] += 1
+                # 断点续跑：已落盘则跳过
+                existing = _image_exists(item_prefix, seed)
+                if existing:
+                    item["images"].append(existing)
+                    item["skipped"] += 1
+                    task["skipped"] += 1
+                    _save(task)
+                    continue
+
+                # 单张失败自动重试（最多 3 次），种子/前缀不变，便于断点续跑对齐；
+                # 任务已被取消时不再重试，也不计入失败（当前图可能刚被协作中断）
+                last_err = None
+                for attempt in range(3):
+                    if task["status"] == "cancelled":
+                        break
+                    try:
+                        prompt = build_prompt({
+                            "positive": item["positive"], "negative": item["negative"],
+                            "width": task["width"], "height": task["height"],
+                            "seed": seed, "steps": task["steps"], "cfg": task["cfg"],
+                            "prefix": item_prefix,
+                            "lock_image": task.get("lock_image"),
+                            "outfit_image": task.get("outfit_image"),
+                        })
+                        r = requests.post(COMFY + "/prompt",
+                                          json={"prompt": prompt, "client_id": CLIENT_ID},
+                                          timeout=30)
+                        d = r.json()
+                        if "prompt_id" not in d:
+                            raise Exception(str(d))
+                        im = _poll(d["prompt_id"])
+                        item["images"].append(im)
+                        item["done"] += 1
+                        task["done"] += 1
+                        last_err = None
+                        break
+                    except Exception as e:
+                        last_err = e
+                        if attempt < 2:
+                            time.sleep(5)
+                if last_err is not None and task["status"] != "cancelled":
+                    item["failed"] += 1
+                    task["failed"] += 1
+                    task["error"] = str(last_err)[:500]
                 _save(task)
-                continue
-
-            # 单张失败自动重试（最多 3 次），种子/前缀不变，便于断点续跑对齐；
-            # 任务已被取消时不再重试，也不计入失败（当前图可能刚被协作中断）
-            last_err = None
-            for attempt in range(3):
-                if task["status"] == "cancelled":
-                    break
-                try:
-                    prompt = build_prompt({
-                        "positive": item["positive"], "negative": item["negative"],
-                        "width": task["width"], "height": task["height"],
-                        "seed": seed, "steps": task["steps"], "cfg": task["cfg"],
-                        "prefix": item_prefix,
-                        "lock_image": task.get("lock_image"),
-                        "outfit_image": task.get("outfit_image"),
-                    })
-                    r = requests.post(COMFY + "/prompt",
-                                      json={"prompt": prompt, "client_id": CLIENT_ID},
-                                      timeout=30)
-                    d = r.json()
-                    if "prompt_id" not in d:
-                        raise Exception(str(d))
-                    im = _poll(d["prompt_id"])
-                    item["images"].append(im)
-                    item["done"] += 1
-                    task["done"] += 1
-                    last_err = None
-                    break
-                except Exception as e:
-                    last_err = e
-                    if attempt < 2:
-                        time.sleep(5)
-            if last_err is not None and task["status"] != "cancelled":
-                item["failed"] += 1
-                task["failed"] += 1
-                task["error"] = str(last_err)[:500]
-            _save(task)
+            except Exception as e:
+                # 单张处理异常（含跳过检查/命名等）：计失败并继续下一张，绝不中断任务与 worker
+                import traceback
+                _errlog("任务 %s 第%d段 第%d张 异常: %s\n%s" % (
+                    task.get("id"), i + 1, j + 1, e, traceback.format_exc()))
+                if task["status"] != "cancelled":
+                    item["failed"] += 1
+                    task["failed"] += 1
+                    task["error"] = ("单张异常: " + str(e))[:500]
+                _save(task)
 
     # 只有全部完成（成功+跳过 >= 总数）才标记 done，否则标记 failed 以便重启后续跑
     if task["status"] != "cancelled":
